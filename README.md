@@ -189,6 +189,26 @@ You should see your account ID and ARN printed. If you get an error, double-chec
 
 ### 2. Deploy the Infrastructure
 
+> **Remote state:** Terraform state is stored remotely in an S3 bucket (`simpletimeservice-terraform-state-328263827642`) with state locking via DynamoDB (`simpletimeservice-terraform-locks`). These resources must exist in your AWS account before running `terraform init`. If you are deploying to a **different AWS account**, create them first:
+>
+> ```bash
+> # Create S3 bucket (replace ACCOUNT_ID with your AWS account ID)
+> aws s3api create-bucket --bucket simpletimeservice-terraform-state-ACCOUNT_ID --region us-east-1
+> aws s3api put-bucket-versioning --bucket simpletimeservice-terraform-state-ACCOUNT_ID --versioning-configuration Status=Enabled
+> aws s3api put-bucket-encryption --bucket simpletimeservice-terraform-state-ACCOUNT_ID \
+>   --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+>
+> # Create DynamoDB table for state locking
+> aws dynamodb create-table \
+>   --table-name simpletimeservice-terraform-locks \
+>   --attribute-definitions AttributeName=LockID,AttributeType=S \
+>   --key-schema AttributeName=LockID,KeyType=HASH \
+>   --billing-mode PAY_PER_REQUEST \
+>   --region us-east-1
+> ```
+>
+> Then update the `bucket` value in `terraform/main.tf` to match your bucket name.
+
 ```bash
 cd terraform
 terraform init
