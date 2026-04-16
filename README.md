@@ -14,10 +14,11 @@ A minimal Go microservice that returns the current UTC timestamp and the visitor
 - [Part 2 — Deploy to AWS with Terraform](#part-2--deploy-to-aws-with-terraform)
   - [Prerequisites](#prerequisites)
   - [1. Configure AWS Credentials](#1-configure-aws-credentials)
-  - [2. Deploy the Infrastructure](#2-deploy-the-infrastructure)
-  - [3. Access the Application](#3-access-the-application)
-  - [4. Viewing Logs with Fluent Bit](#4-viewing-logs-with-fluent-bit)
-  - [5. Destroy the Infrastructure](#5-destroy-the-infrastructure)
+  - [2. Create the Terraform Remote State Backend](#2-create-the-terraform-remote-state-backend)
+  - [3. Deploy the Infrastructure](#3-deploy-the-infrastructure)
+  - [4. Access the Application](#4-access-the-application)
+  - [5. Viewing Logs with Fluent Bit](#5-viewing-logs-with-fluent-bit)
+  - [6. Destroy the Infrastructure](#6-destroy-the-infrastructure)
 - [CI/CD Pipeline](#cicd-pipeline)
 - [Configuration Variables](#configuration-variables)
 
@@ -187,27 +188,58 @@ You should see your account ID and ARN printed. If you get an error, double-chec
 
 ---
 
-### 2. Deploy the Infrastructure
+### 2. Create the Terraform Remote State Backend
 
-> **Remote state:** Terraform state is stored remotely in an S3 bucket (`simpletimeservice-terraform-state-328263827642`) with state locking via DynamoDB (`simpletimeservice-terraform-locks`). These resources must exist in your AWS account before running `terraform init`. If you are deploying to a **different AWS account**, create them first:
->
-> ```bash
-> # Create S3 bucket (replace ACCOUNT_ID with your AWS account ID)
-> aws s3api create-bucket --bucket simpletimeservice-terraform-state-ACCOUNT_ID --region us-east-1
-> aws s3api put-bucket-versioning --bucket simpletimeservice-terraform-state-ACCOUNT_ID --versioning-configuration Status=Enabled
-> aws s3api put-bucket-encryption --bucket simpletimeservice-terraform-state-ACCOUNT_ID \
->   --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
->
-> # Create DynamoDB table for state locking
-> aws dynamodb create-table \
->   --table-name simpletimeservice-terraform-locks \
->   --attribute-definitions AttributeName=LockID,AttributeType=S \
->   --key-schema AttributeName=LockID,KeyType=HASH \
->   --billing-mode PAY_PER_REQUEST \
->   --region us-east-1
-> ```
->
-> Then update the `bucket` value in `terraform/main.tf` to match your bucket name.
+Terraform stores its state remotely in S3 with DynamoDB for locking. These resources must exist in your AWS account **before** running `terraform init`.
+
+**Step 1** — Get your AWS account ID:
+
+```bash
+aws sts get-caller-identity --query Account --output text
+```
+
+**Step 2** — Create the S3 bucket (replace `YOUR_ACCOUNT_ID` with the value from above):
+
+```bash
+aws s3api create-bucket \
+  --bucket simpletimeservice-terraform-state-YOUR_ACCOUNT_ID \
+  --region us-east-1
+
+aws s3api put-bucket-versioning \
+  --bucket simpletimeservice-terraform-state-YOUR_ACCOUNT_ID \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --bucket simpletimeservice-terraform-state-YOUR_ACCOUNT_ID \
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+```
+
+**Step 3** — Create the DynamoDB table for state locking:
+
+```bash
+aws dynamodb create-table \
+  --table-name simpletimeservice-terraform-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-east-1
+```
+
+**Step 4** — Update `terraform/main.tf` with your bucket name. Find the `backend "s3"` block and replace the `bucket` value:
+
+```hcl
+backend "s3" {
+  bucket         = "simpletimeservice-terraform-state-YOUR_ACCOUNT_ID"
+  key            = "simpletimeservice/terraform.tfstate"
+  region         = "us-east-1"
+  encrypt        = true
+  dynamodb_table = "simpletimeservice-terraform-locks"
+}
+```
+
+---
+
+### 3. Deploy the Infrastructure
 
 ```bash
 cd terraform
@@ -221,7 +253,7 @@ Deployment takes approximately **3–5 minutes**. Most of that time is the NAT G
 
 ---
 
-### 3. Access the Application
+### 4. Access the Application
 
 Once `terraform apply` completes, the ALB URL is printed as an output:
 
@@ -250,7 +282,7 @@ Expected response:
 
 ---
 
-### 4. Viewing Logs with Fluent Bit
+### 5. Viewing Logs with Fluent Bit
 
 Each ECS task runs a **Fluent Bit sidecar** that collects the application's stdout logs using AWS FireLens and ships them to **CloudWatch Logs**.
 
@@ -276,7 +308,7 @@ This streams new log entries in real time as requests come in. Press `Ctrl+C` to
 
 ---
 
-### 5. Destroy the Infrastructure
+### 6. Destroy the Infrastructure
 
 When you are done, tear down all resources to avoid ongoing AWS charges:
 
