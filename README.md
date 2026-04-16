@@ -16,7 +16,9 @@ A minimal Go microservice that returns the current UTC timestamp and the visitor
   - [1. Configure AWS Credentials](#1-configure-aws-credentials)
   - [2. Deploy the Infrastructure](#2-deploy-the-infrastructure)
   - [3. Access the Application](#3-access-the-application)
-  - [4. Destroy the Infrastructure](#4-destroy-the-infrastructure)
+  - [4. Viewing Logs with Fluent Bit](#4-viewing-logs-with-fluent-bit)
+  - [5. Destroy the Infrastructure](#5-destroy-the-infrastructure)
+- [CI/CD Pipeline](#cicd-pipeline)
 - [Configuration Variables](#configuration-variables)
 
 ---
@@ -25,6 +27,9 @@ A minimal Go microservice that returns the current UTC timestamp and the visitor
 
 ```
 .
+├── .github/
+│   └── workflows/
+│       └── docker.yml  # GitHub Actions — builds and pushes Docker image
 ├── app/
 │   ├── main.go         # Go web service
 │   ├── go.mod          # Go module definition
@@ -35,9 +40,9 @@ A minimal Go microservice that returns the current UTC timestamp and the visitor
     ├── terraform.tfvars# Default variable values
     ├── vpc.tf          # VPC, subnets, IGW, NAT Gateway, route tables
     ├── security.tf     # Security groups
-    ├── iam.tf          # ECS task execution role
+    ├── iam.tf          # ECS execution role and task role
     ├── alb.tf          # Application Load Balancer
-    ├── ecs.tf          # ECS cluster, task definition, and service
+    ├── ecs.tf          # ECS cluster, task definition (app + Fluent Bit), service
     └── outputs.tf      # Output values (e.g. ALB URL)
 ```
 
@@ -52,14 +57,17 @@ Internet
 Internet Gateway
     │
     ▼
-Application Load Balancer     ← public subnets (us-east-1a, us-east-1b)
+Application Load Balancer          ← public subnets (us-east-1a, us-east-1b)
     │
     ▼
-ECS Fargate Tasks             ← private subnets (us-east-1a, us-east-1b)
-[simpletimeservice:v1.0.0]
+ECS Fargate Task                   ← private subnets (us-east-1a, us-east-1b)
+┌─────────────────────────────┐
+│  simpletimeservice (app)    │  ← handles HTTP requests on port 8080
+│  Fluent Bit (sidecar)       │  ← collects and ships logs to CloudWatch
+└─────────────────────────────┘
     │
     ▼
-NAT Gateway                   ← outbound traffic (e.g. pulling Docker image)
+NAT Gateway                        ← outbound traffic (e.g. pulling Docker image)
 ```
 
 **Why ECS Fargate?**
@@ -70,6 +78,9 @@ Fargate is a serverless container runtime — there are no EC2 instances to mana
 - The **ALB lives in the public subnets** and is the only entry point from the internet.
 - The **ECS tasks run in private subnets** and are not directly reachable from the internet.
 - A **NAT Gateway** in the public subnet allows ECS tasks to make outbound calls (e.g. to pull the Docker image from DockerHub).
+
+**Fluent Bit sidecar:**
+Each ECS task runs two containers: the application and a Fluent Bit sidecar. The app's stdout logs are intercepted by Fluent Bit via AWS FireLens and forwarded to CloudWatch Logs. This keeps the application container completely decoupled from the logging infrastructure.
 
 ---
 
@@ -184,7 +195,7 @@ terraform init
 terraform apply
 ```
 
-Terraform will show you a plan of the 25 resources it will create and ask for confirmation. Type `yes` and press Enter.
+Terraform will show you a plan of all the resources it will create and ask for confirmation. Type `yes` and press Enter.
 
 Deployment takes approximately **3–5 minutes**. Most of that time is the NAT Gateway and ALB being provisioned.
 
@@ -219,7 +230,33 @@ Expected response:
 
 ---
 
-### 4. Destroy the Infrastructure
+### 4. Viewing Logs with Fluent Bit
+
+Each ECS task runs a **Fluent Bit sidecar** that collects the application's stdout logs using AWS FireLens and ships them to **CloudWatch Logs**.
+
+Two log groups are created automatically:
+
+| Log Group | Contents |
+|---|---|
+| `/ecs/simpletimeservice` | Application logs (HTTP requests, errors) |
+| `/ecs/simpletimeservice/fluent-bit` | Fluent Bit operational logs |
+
+**Option A — AWS Console:**
+1. Go to **CloudWatch → Log groups**
+2. Open `/ecs/simpletimeservice`
+3. Click on any log stream to view individual task logs
+
+**Option B — AWS CLI (live tail):**
+
+```bash
+aws logs tail /ecs/simpletimeservice --follow
+```
+
+This streams new log entries in real time as requests come in. Press `Ctrl+C` to stop.
+
+---
+
+### 5. Destroy the Infrastructure
 
 When you are done, tear down all resources to avoid ongoing AWS charges:
 
@@ -231,6 +268,25 @@ terraform destroy
 Type `yes` when prompted. This will remove all resources created by Terraform.
 
 > **Cost warning:** Leaving this infrastructure running costs approximately **$13–15 per week**, mostly due to the NAT Gateway ($0.045/hr).
+
+---
+
+## CI/CD Pipeline
+
+A GitHub Actions workflow (`.github/workflows/docker.yml`) automatically builds and pushes the Docker image to DockerHub whenever code in the `app/` directory is pushed to the `main` branch.
+
+**Tags pushed on each run:**
+- `bruno74t/simpletimeservice:latest`
+- `bruno74t/simpletimeservice:<git-commit-sha>`
+
+**Required GitHub repository secrets:**
+
+| Secret | Value |
+|---|---|
+| `DOCKERHUB_USERNAME` | Your DockerHub username |
+| `DOCKERHUB_TOKEN` | Your DockerHub password or access token |
+
+To add secrets: go to your GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**.
 
 ---
 
@@ -247,6 +303,6 @@ All variables are defined in `terraform/variables.tf` with defaults set in `terr
 | `private_subnet_cidrs` | `["10.0.3.0/24", "10.0.4.0/24"]` | Private subnet CIDRs (one per AZ) |
 | `container_image` | `bruno74t/simpletimeservice:v1.0.0` | Docker image to deploy |
 | `container_port` | `8080` | Port the container listens on |
-| `task_cpu` | `256` | Fargate task CPU units (256 = 0.25 vCPU) |
-| `task_memory` | `512` | Fargate task memory in MB |
+| `task_cpu` | `512` | Fargate task CPU units (512 = 0.5 vCPU, shared across both containers) |
+| `task_memory` | `1024` | Fargate task memory in MB (shared across both containers) |
 | `desired_count` | `2` | Number of running ECS task replicas |
