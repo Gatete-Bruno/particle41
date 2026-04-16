@@ -1,0 +1,9 @@
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+.terraform.lock.hcl
+
+# macOS
+.DS_Store
