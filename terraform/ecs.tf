@@ -11,8 +11,30 @@ resource "aws_ecs_task_definition" "main" {
   cpu                      = var.task_cpu
   memory                   = var.task_memory
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
 
   container_definitions = jsonencode([
+    # ── Fluent Bit sidecar (FireLens log router) ──────────────────────────────
+    {
+      name      = "fluent-bit"
+      image     = "amazon/aws-for-fluent-bit:latest"
+      essential = true
+
+      firelensConfiguration = {
+        type = "fluentbit"
+      }
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/${var.project_name}/fluent-bit"
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "fluent-bit"
+        }
+      }
+    },
+
+    # ── Main application container ────────────────────────────────────────────
     {
       name      = var.project_name
       image     = var.container_image
@@ -25,14 +47,24 @@ resource "aws_ecs_task_definition" "main" {
         }
       ]
 
+      # Logs are routed via Fluent Bit (FireLens) to CloudWatch
       logConfiguration = {
-        logDriver = "awslogs"
+        logDriver = "awsfirelens"
         options = {
-          awslogs-group         = "/ecs/${var.project_name}"
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
+          Name              = "cloudwatch_logs"
+          region            = var.aws_region
+          log_group_name    = "/ecs/${var.project_name}"
+          log_stream_prefix = "app"
+          auto_create_group = "false"
         }
       }
+
+      dependsOn = [
+        {
+          containerName = "fluent-bit"
+          condition     = "START"
+        }
+      ]
     }
   ])
 
@@ -44,6 +76,13 @@ resource "aws_cloudwatch_log_group" "ecs" {
   retention_in_days = 7
 
   tags = { Name = "${var.project_name}-logs" }
+}
+
+resource "aws_cloudwatch_log_group" "fluent_bit" {
+  name              = "/ecs/${var.project_name}/fluent-bit"
+  retention_in_days = 7
+
+  tags = { Name = "${var.project_name}-fluent-bit-logs" }
 }
 
 resource "aws_ecs_service" "main" {
