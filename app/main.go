@@ -30,11 +30,13 @@ func getClientIP(r *http.Request) string {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
+	ip := getClientIP(r)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response{
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		IP:        getClientIP(r),
+		IP:        ip,
 	})
+	log.Printf("request from %s", ip)
 }
 
 func main() {
