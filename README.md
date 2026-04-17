@@ -2,6 +2,8 @@
 
 A minimal Go microservice that returns the current UTC timestamp and the visitor's IP address as JSON. It is containerized with Docker and deployed to AWS using Terraform/OpenTofu.
 
+> **Blog post:** A detailed write-up covering the architecture, design decisions, and implementation is available at [hashnode.com/edit/cmo2sqs81005h2bnc773d8ty7](https://hashnode.com/edit/cmo2sqs81005h2bnc773d8ty7)
+
 ---
 
 ## Table of Contents
